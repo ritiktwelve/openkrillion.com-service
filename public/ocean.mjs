@@ -9,7 +9,7 @@ function seed(n){const v=Math.sin(n*127.1+311.7)*43758.5453123;return v-Math.flo
 export class Ocean {
   constructor(canvas,mascot){
     this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});this.mascot=mascot;
-    this.scenery=new Seascape();this.phase='intro';this.depth=0;this.target=0;this.cameraDepth=-45;this.cameraTarget=-45;this.active=0;this.targetActive=0;this.time=0;this.particles=[];this.fx=null;
+    this.scenery=new Seascape();this.phase='intro';this.depth=0;this.target=0;this.cameraDepth=-45;this.cameraTarget=-45;this.active=0;this.targetActive=0;this.time=0;this.particles=[];this.fx=null;this.ghost=null;
     this.lowPower=false;this.reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;this.last=0;this.mx=.72;this.my=.66;
     this.sprites={};for(const name of ['krill','krill-gold','schooler','rare','deepcut','tooclever']){const img=new Image();img.src='/assets/'+name+'.svg';this.sprites[name]=img;}
     this.resize();this.observer=new ResizeObserver(()=>this.resize());this.observer.observe(canvas);requestAnimationFrame(t=>this.tick(t));
@@ -21,6 +21,7 @@ export class Ocean {
   moveCamera(to,duration=2200,ease=easeInOut){this.cameraTarget=to;this.cameraJob={from:this.cameraDepth,to,start:performance.now(),duration:this.reduced?1:duration,ease};}
   setPhase(phase){this.phase=phase;this.targetActive=phase==='intro'||phase==='done'?0:1;if(phase==='intro')this.moveCamera(-45,700);}
   setDepth(value){this.target=value;if(!['plunge','surface'].includes(this.phase)){this.depth=value;if(this.phase==='landed')this.moveCamera(value+30,500);}}
+  setGhost(ghost){this.ghost=ghost?{name:ghost.name||'GHOST',depth:ghost.depth??0}:null;}
   round(depth){this.target=depth;this.depth=depth;this.fx=null;this.roundBase=depth;const l=this.layout(),card=document.getElementById('prompt-card'),dockTop=l.height-80,cardHeight=card?.offsetHeight||180;this.roundAnchor=Math.max(8,Math.min(l.mobile?175:210,(dockTop-cardHeight)/2));this.moveCamera(depth+(l.height/2-this.roundAnchor)/2,2200);}
   drop(oldDepth,result,progress){this.cameraJob=null;this.fx={tier:result.tier,progress,startDepth:oldDepth,resultDepth:oldDepth+result.score*10};const eased=result.tier==='plankton'?(1-Math.cos(Math.PI*progress))/2:easeInOut(progress);this.cameraDepth=mix(oldDepth+120,oldDepth+result.score*10+30,eased);this.cameraTarget=oldDepth+result.score*10+30;this.depth=result.tier==='krillion'?oldDepth:mix(oldDepth,oldDepth+result.score*10,eased);this.target=oldDepth+result.score*10;}
   typeAt(x,y,n=2){if(this.reduced)return;for(let i=0;i<n;i++)this.particles.push({x:x+(Math.random()-.5)*8,y:y+Math.random()*10,vx:(Math.random()-.5)*8,vy:-35-Math.random()*15,life:1,color:'#b2dce8',bubble:true,r:1+Math.random()*2});}
@@ -52,6 +53,7 @@ export class Ocean {
     const minD=Math.max(0,Math.floor((this.cameraDepth-l.height/4)/10)*10),maxD=this.cameraDepth+l.height/4;
     for(let d=minD;d<=maxD;d+=10){const yy=worldY(d);if(yy<0||yy>l.height)continue;const size=d%100===0?16:d%50===0?10:5;c.beginPath();c.moveTo(rulerX-size,yy);c.lineTo(rulerX,yy);c.stroke();if(d%100===0&&(!this.roundIndex||Math.abs(yy-worldY(this.target))>14))c.fillText(d===0?'0m':`-${d.toLocaleString()}m`,rulerX-size-5,yy+4);}
     if(this.roundIndex){const yy=worldY(this.target);if(yy>0&&yy<l.height){c.fillStyle='#ff5d8f';c.beginPath();c.moveTo(rulerX+4,yy);c.lineTo(rulerX+12,yy-5);c.lineTo(rulerX+12,yy+5);c.fill();c.strokeStyle='#ff5d8f';c.beginPath();c.moveTo(rulerX-20,yy);c.lineTo(rulerX+4,yy);c.stroke();c.fillText('YOU',rulerX-24,yy+4);}}
+    if(this.ghost&&!['intro','done'].includes(this.phase)){const gy=worldY(this.ghost.depth);if(gy>0&&gy<l.height){const overlap=this.roundIndex&&Math.abs(gy-worldY(this.target))<16;c.save();c.strokeStyle='#7ef9ff';c.fillStyle='#7ef9ff';c.setLineDash([4,3]);c.beginPath();c.moveTo(rulerX-20,gy);c.lineTo(rulerX+4,gy);c.stroke();c.setLineDash([]);c.beginPath();c.moveTo(rulerX+4,gy);c.lineTo(rulerX+12,gy-5);c.lineTo(rulerX+12,gy+5);c.closePath();c.stroke();c.font='13px VT323';c.textAlign='right';c.fillText((this.ghost.name||'GHOST').toUpperCase().slice(0,10),rulerX-24,gy+(overlap?-6:4));if(this.sprites.krill?.complete){c.globalAlpha=.28+.08*Math.sin(t*2.5);c.drawImage(this.sprites.krill,rulerX-78,gy-16+Math.sin(t*2)*3,28,28);}c.restore();}}
     c.font=`${l.mobile?13:17}px VT323`;c.fillStyle=this.phase==='plunge'?'#7d93b8d9':'#7d93b81a';for(const[d,text,side]of landmarks){const yy=worldY(d);if(yy<90||yy>l.height-100)continue;if(['intro','done'].includes(this.phase))continue;c.textAlign=side==='L'?'left':'right';c.fillText(side==='L'?`── ${text}`:`${text} ──`,side==='L'?l.left+l.width*.05:w-l.rail-96,yy);}
     c.textAlign='left';
     if(this.fx&&(this.phase==='plunge'||this.phase==='landed'&&this.fx.tier==='krillion'))this.drawEffect(l);

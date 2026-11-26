@@ -8,6 +8,10 @@ const cache = new Map();
 const json = (data, status = 200, extra = {}) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', ...extra } });
 const fail = (message, status = 400) => json({ error: message }, status);
 const playerId = request => request.headers.get('Cookie')?.match(/(?:^|;\s*)ok_player=([a-f0-9-]{36})/)?.[1];
+const CHALLENGE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const challengeCode = () => [...crypto.getRandomValues(new Uint8Array(8))].map(b => CHALLENGE_ALPHABET[b % CHALLENGE_ALPHABET.length]).join('');
+const normalizeCode = value => typeof value === 'string' && /^[A-Za-z0-9]{6,16}$/.test(value.trim()) ? value.trim().toUpperCase() : null;
+const cleanChallengerName = value => { const s = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 24); return s || 'A diver'; };
 function headers(response, additional = {}) {
   const h = new Headers(response.headers);
   for (const [k, v] of Object.entries({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'X-Frame-Options': 'SAMEORIGIN', ...additional })) h.set(k, v);
@@ -57,6 +61,21 @@ async function ownRun(env, id, player) {
   if (!/^[a-f0-9-]{36}$/.test(id || '')) return null;
   return env.DB.prepare('SELECT * FROM runs WHERE id=? AND player=?').bind(id, player || '').first();
 }
+async function loadChallenge(env, code, viewerPlayer, viewerRunId) {
+  const row = await env.DB.prepare('SELECT c.code, c.run_id, c.challenger_name, c.created_at, r.player, r.date, r.mode, r.completed FROM challenges c JOIN runs r ON r.id=c.run_id WHERE c.code=?').bind(code).first();
+  if (!row?.completed) return null;
+  const answers = (await env.DB.prepare('SELECT round, answer, tier, score FROM answers WHERE run_id=? ORDER BY round').bind(row.run_id).all()).results;
+  const puzzle = await puzzleFor(env, row.date);
+  const viewerRun = viewerRunId ? await ownRun(env, viewerRunId, viewerPlayer) : null;
+  const isSelf = !!viewerPlayer && viewerPlayer === row.player;
+  const revealed = isSelf || (!!viewerRun?.completed && viewerRun.date === row.date);
+  let running = 0;
+  const rounds = answers.map(a => {
+    running += a.score;
+    return { round: a.round, tier: a.tier, score: a.score, cumulativeScore: running, ...(revealed ? { answer: a.answer } : {}) };
+  });
+  return { code: row.code, challengerName: row.challenger_name, date: row.date, dayNumber: puzzle.dayNumber, mode: row.mode, totalScore: running, isSelf, revealed, rounds };
+}
 async function limit(env, request, player) {
   const window = Math.floor(Date.now() / 60000);
   const raw = `${player || ''}|${request.headers.get('CF-Connecting-IP') || 'local'}|${window}`;
@@ -72,6 +91,12 @@ async function api(request, env, url) {
   if (request.method === 'GET' && path === '/api/state') {
     const run = await ownRun(env, url.searchParams.get('run'), player);
     return run ? json(await state(env, run)) : fail('Dive not found on this browser.', 404);
+  }
+  if (request.method === 'GET' && path === '/api/challenge') {
+    const code = normalizeCode(url.searchParams.get('code'));
+    if (!code) return fail('Ghost challenge not found.', 404);
+    const challenge = await loadChallenge(env, code, player, url.searchParams.get('run'));
+    return challenge ? json(challenge) : fail('Ghost challenge not found.', 404);
   }
   if (request.method === 'GET' && path === '/api/review') {
     const run = await ownRun(env, url.searchParams.get('run'), player);
@@ -91,15 +116,49 @@ async function api(request, env, url) {
   let data; try { const raw = await request.text(); if (raw.length > 8000) return fail('Request is too large.', 413); data = JSON.parse(raw); } catch { return fail('Invalid request.'); }
   if (!data || typeof data !== 'object' || Array.isArray(data)) return fail('Invalid request.');
   if (path === '/api/start') {
-    const id = player || crypto.randomUUID(), mode = data.practice === true ? 'practice' : 'daily';
-    const puzzle = await puzzleFor(env, date); await saveSample(env, puzzle);
-    let run = mode === 'daily' ? await env.DB.prepare("SELECT * FROM runs WHERE player=? AND date=? AND mode='daily'").bind(id, date).first() : null;
+    const id = player || crypto.randomUUID();
+    let targetDate = date;
+    let mode = data.practice === true ? 'practice' : 'daily';
+    if (data.challenge) {
+      const code = normalizeCode(data.challenge);
+      const ch = code ? await env.DB.prepare('SELECT r.date FROM challenges c JOIN runs r ON r.id=c.run_id WHERE c.code=? AND r.completed=1').bind(code).first() : null;
+      if (!ch) return fail('Ghost challenge not found.', 404);
+      targetDate = ch.date;
+      if (targetDate !== date) mode = 'practice';
+    }
+    const puzzle = await puzzleFor(env, targetDate); await saveSample(env, puzzle);
+    let run = mode === 'daily' ? await env.DB.prepare("SELECT * FROM runs WHERE player=? AND date=? AND mode='daily'").bind(id, targetDate).first() : null;
     if (!run) {
       const rid = crypto.randomUUID();
-      await env.DB.prepare('INSERT OR IGNORE INTO runs(id,player,date,mode,round_start,created_at) VALUES(?,?,?,?,?,?)').bind(rid, id, date, mode, Date.now() + PREVIEW_MS, Date.now()).run();
-      run = mode === 'daily' ? await env.DB.prepare("SELECT * FROM runs WHERE player=? AND date=? AND mode='daily'").bind(id,date).first() : await ownRun(env,rid,id);
+      await env.DB.prepare('INSERT OR IGNORE INTO runs(id,player,date,mode,round_start,created_at) VALUES(?,?,?,?,?,?)').bind(rid, id, targetDate, mode, Date.now() + PREVIEW_MS, Date.now()).run();
+      run = mode === 'daily' ? await env.DB.prepare("SELECT * FROM runs WHERE player=? AND date=? AND mode='daily'").bind(id,targetDate).first() : await ownRun(env,rid,id);
     }
     return json(await state(env, run), 200, { 'Set-Cookie': `ok_player=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${url.protocol === 'https:' ? '; Secure' : ''}` });
+  }
+  if (path === '/api/challenge') {
+    const run = await ownRun(env, data.runId, player);
+    if (!run) return fail('Dive not found.', 404);
+    if (!run.completed) return fail('Finish your dive before creating a ghost challenge.', 403);
+    const hasName = typeof data.name === 'string' && data.name.trim().length > 0;
+    const challengerName = cleanChallengerName(data.name);
+    let existing = await env.DB.prepare('SELECT code, challenger_name FROM challenges WHERE run_id=?').bind(run.id).first();
+    if (existing) {
+      if (hasName && existing.challenger_name !== challengerName) {
+        await env.DB.prepare('UPDATE challenges SET challenger_name=? WHERE code=?').bind(challengerName, existing.code).run();
+        existing = { ...existing, challenger_name: challengerName };
+      }
+    } else {
+      let code = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = challengeCode();
+        const inserted = await env.DB.prepare('INSERT OR IGNORE INTO challenges(code,run_id,challenger_name,created_at) VALUES(?,?,?,?)').bind(candidate, run.id, challengerName, Date.now()).run();
+        if (inserted.meta?.changes) { code = candidate; break; }
+      }
+      if (!code) return fail('Could not create challenge link. Please retry.', 503);
+      existing = { code, challenger_name: challengerName };
+    }
+    const challenge = await loadChallenge(env, existing.code, player, run.id);
+    return json({ ...challenge, url: `${url.origin}/c/${existing.code}` });
   }
   if (path === '/api/pause') {
     const run = await ownRun(env,data.runId,player);
@@ -167,7 +226,7 @@ export default {
       if (!['GET','HEAD'].includes(request.method)) return headers(fail('Method not allowed.',405));
       const docs = documents();
       if (docs[url.pathname]) return headers(new Response(request.method==='HEAD'?null:docs[url.pathname],{headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-cache'}}));
-      if (url.pathname === '/') return headers(new Response(request.method==='HEAD'?null:homePage(url.searchParams.get('lang') === 'zh' ? 'zh':'en',env),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-cache'}}));
+      if (url.pathname === '/' || /^\/c\/[A-Za-z0-9]{6,16}$/.test(url.pathname)) return headers(new Response(request.method==='HEAD'?null:homePage(url.searchParams.get('lang') === 'zh' ? 'zh':'en',env),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-cache'}}));
       if (['/privacy','/about'].includes(url.pathname)) return headers(new Response(request.method==='HEAD'?null:infoPage(url.pathname),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'public, max-age=300'}}));
       if (url.pathname === '/robots.txt') return headers(new Response('User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: https://openkrillion.com/sitemap.xml\n',{headers:{'Content-Type':'text/plain; charset=utf-8'}}));
       if (url.pathname === '/sitemap.xml') return headers(new Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+['/','/about','/privacy'].map(p=>`<url><loc>${SITE.origin}${p}</loc></url>`).join('')+'</urlset>',{headers:{'Content-Type':'application/xml; charset=utf-8'}}));

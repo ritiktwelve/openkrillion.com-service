@@ -207,3 +207,33 @@ body[data-phase="done"] .mascot{z-index:15}
 @keyframes companion-chomp{22%{transform:translateX(-7px) scale(.9) rotate(7deg)}42%{transform:translateX(11px) scale(1.24) rotate(-9deg)}58%{transform:translateX(5px) scale(1.02)}74%{transform:translateX(9px) scale(1.18) rotate(-7deg)}}
 .low-power .mascot:not(.poked):not(.celebrate) img{animation-play-state:paused}
 @media(prefers-reduced-motion:reduce){.mascot img{animation:none!important}}
+
+/* Ghost Challenge Links */
+.ghost-banner{background:#0b192be8;border:2px solid #7ef9ff66;padding:12px 16px;text-align:center;box-shadow:0 0 24px #4de3ff22}
+.ghost-banner .eyebrow{color:#7ef9ff;font-size:13px;letter-spacing:.26em;margin:0 0 4px}
+.ghost-target{margin:0 0 6px;font-size:20px;line-height:1.35;color:var(--foam)}
+.ghost-target b{font-weight:400;color:#7ef9ff}
+.land-ghost{margin:10px 0 0;font-size:16px;letter-spacing:.08em;color:#7ef9ff}
+.land-ghost b{font-weight:400;color:var(--gold)}
+.challenge-box{margin:14px 0 20px;padding:14px 16px;background:#091525;border:1px solid #2b486b}
+.challenge-box .eyebrow{color:#7ef9ff;font-size:13px;letter-spacing:.22em;margin:0 0 8px}
+.challenge-form label{display:block;font-size:16px;color:var(--muted);margin-bottom:6px}
+.challenge-form>div,.challenge-link-row{display:flex;gap:8px;align-items:center}
+.challenge-form input,.challenge-link-row input{min-width:0;flex:1;background:#0c1828;border:1px solid #2b4260;color:var(--foam);padding:8px 10px;font-size:18px}
+.challenge-box .muted{margin:8px 0 0;font-size:15px}
+.ghost-compare{background:#091525d9;border:1px solid #2a4564;padding:14px 16px;margin:0 0 24px}
+.ghost-verdict{margin:0 0 8px;font-size:21px;letter-spacing:.08em;color:#7ef9ff}
+.ghost-totals{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:16px;color:var(--muted);padding-bottom:10px;border-bottom:1px solid #26374e}
+.ghost-totals b{font-weight:400;color:var(--foam)}
+.ghost-rows{list-style:none;margin:0;padding:0}
+.ghost-rows li{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid #7d93b81f;align-items:flex-start}
+.ghost-rows li:last-child{border-bottom:0}
+.ghost-round-num{color:var(--muted);font-size:15px;width:16px;flex:none;padding-top:2px}
+.ghost-round-body{flex:1;min-width:0}
+.ghost-prompt{display:block;font-size:16px;color:var(--foam);margin-bottom:4px}
+.ghost-pair{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 14px;font-size:15px}
+.ghost-pair b{font-weight:400;opacity:.8}
+.ghost-pair em{font-style:normal;opacity:.9}
+.review-list .ghost-tag{font-size:12px;color:#7ef9ff;margin-left:8px}
+@media(max-width:699px){.share-actions{flex-wrap:wrap}.challenge-form>div,.challenge-link-row{flex-direction:column;align-items:stretch}}
+

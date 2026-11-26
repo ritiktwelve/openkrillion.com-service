@@ -13,6 +13,7 @@ function database(){
   const db=new DatabaseSync(':memory:');
   db.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
   db.exec(readFileSync(new URL('../migrations/0002_pause.sql',import.meta.url),'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0003_challenges.sql',import.meta.url),'utf8'));
   const prepare=sql=>({
     bind(...args){
       const s=db.prepare(sql);
@@ -96,4 +97,48 @@ test('SSR SEO exposes an expandable guide, correct canonical and no crawler-spec
 });
 test('public docs GET and HEAD are readable UTF-8 and not SPA HTML',async()=>{
   const s=service();for(const path of Object.keys(documents()))for(const method of ['GET','HEAD']){const r=await worker.fetch(new Request('http://localhost:3051'+path,{method}),s.env,{});assert.equal(r.status,200);assert.match(r.headers.get('Content-Type'),/text\/plain; charset=utf-8/);const body=await r.text();if(method==='HEAD')assert.equal(body,'');else{assert.ok(body.startsWith('# OpenKrillion'));assert.ok(!body.includes('<!doctype html>'));}}s.env.DB.close();
+});
+test('ghost challenge links require completion, hide challenger answers until friend finishes, and serve /c/:code HTML',async()=>{
+  const env={DB:database(),BUCKET:{put:async()=>{},get:async()=>null},LOCAL_DEVELOPMENT:'true',REFERENCE_SYNC:'false',ASSETS:{fetch:async()=>new Response('not found',{status:404})}};
+  const client=()=>{let cookie='';return{async call(path,data,extra={}){const r=await worker.fetch(new Request('http://localhost:3051'+path,{...(data===undefined?{}:{method:'POST',body:JSON.stringify(data),headers:{'Content-Type':'application/json','Cookie':cookie,...extra}}),...(data===undefined?{headers:{Cookie:cookie,...extra}}:{})}),env,{});if(r.headers.get('Set-Cookie'))cookie=r.headers.get('Set-Cookie').split(';')[0];return{status:r.status,body:await r.json()};}};};
+  const alice=client(),bob=client();
+  const startA=await alice.call('/api/start',{});
+  const early=await alice.call('/api/challenge',{runId:startA.body.runId,name:'Alice'});
+  assert.equal(early.status,403);
+  for(let i=0;i<7;i++){
+    const ans=DEMO.prompts[i].answers.find(a=>a.tier==='krillion').answer;
+    await alice.call('/api/answer',{runId:startA.body.runId,round:i,answer:ans,confirm:true});
+    if(i<6)await alice.call('/api/next',{runId:startA.body.runId});
+  }
+  const created=await alice.call('/api/challenge',{runId:startA.body.runId,name:'Alice'});
+  assert.equal(created.status,200);
+  assert.match(created.body.code,/^[A-Z0-9]{8}$/);
+  assert.equal(created.body.url,'http://localhost:3051/c/'+created.body.code);
+  assert.equal(created.body.totalScore,700);
+  assert.equal(created.body.revealed,true);
+  const again=await alice.call('/api/challenge',{runId:startA.body.runId,name:'Alice'});
+  assert.equal(again.body.code,created.body.code);
+  const page=await worker.fetch(new Request('http://localhost:3051/c/'+created.body.code),env,{});
+  assert.equal(page.status,200);
+  assert.match(page.headers.get('Content-Type'),/text\/html/);
+  const preview=await bob.call('/api/challenge?code='+created.body.code);
+  assert.equal(preview.status,200);
+  assert.equal(preview.body.challengerName,'Alice');
+  assert.equal(preview.body.revealed,false);
+  assert.equal(preview.body.rounds.length,7);
+  assert.ok(preview.body.rounds.every(r=>r.answer===undefined&&typeof r.cumulativeScore==='number'));
+  const startB=await bob.call('/api/start',{challenge:created.body.code});
+  assert.equal(startB.status,200);
+  const mid=await bob.call('/api/challenge?code='+created.body.code+'&run='+startB.body.runId);
+  assert.equal(mid.body.revealed,false);
+  for(let i=0;i<7;i++){
+    const ans=DEMO.prompts[i].answers.find(a=>a.tier==='schooler').answer;
+    await bob.call('/api/answer',{runId:startB.body.runId,round:i,answer:ans,confirm:true});
+    if(i<6)await bob.call('/api/next',{runId:startB.body.runId});
+  }
+  const after=await bob.call('/api/challenge?code='+created.body.code+'&run='+startB.body.runId);
+  assert.equal(after.status,200);
+  assert.equal(after.body.revealed,true);
+  assert.ok(after.body.rounds.every(r=>typeof r.answer==='string'&&r.answer.length>0));
+  env.DB.close();
 });
